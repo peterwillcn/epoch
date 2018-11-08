@@ -133,7 +133,7 @@ is_leader() ->
 post_block(Block) ->
     case aec_validation:validate_block(Block) of
         ok ->
-            gen_server:call(?SERVER, {post_block, Block});
+            gen_server:call(?SERVER, {post_block, Block}, 30000);
         {error, {header, Reason}} ->
             epoch_mining:info("Header failed validation: ~p", [Reason]),
             {error, Reason};
