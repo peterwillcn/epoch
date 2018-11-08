@@ -107,12 +107,7 @@ check(#oracle_extend_tx{nonce = Nonce, oracle_ttl = OTTL, fee = Fee} = Tx,
     Checks =
         [fun() -> check_oracle_extension_ttl(OTTL) end,
          fun() -> aetx_utils:check_account(OraclePK, Trees, Nonce, Fee) end,
-         fun() -> ensure_oracle(OraclePK, Trees) end
-         | case aetx_env:context(Env) of
-               aetx_contract -> []; %% TODO Cater for TTL fee from contract.
-               aetx_transaction ->
-                   [fun() -> aeo_utils:check_ttl_fee(Height, OTTL, Fee) end]
-           end],
+         fun() -> ensure_oracle(OraclePK, Trees) end],
 
     case aeu_validation:run(Checks) of
         ok              -> {ok, Trees};

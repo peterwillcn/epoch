@@ -171,7 +171,7 @@ fee(#aetx{ cb = CB, tx = Tx }) ->
 
 -spec gas(Tx :: tx()) -> Gas :: non_neg_integer().
 gas(#aetx{ type = Type, cb = CB, size = Size, tx = Tx }) when Type =/= channel_offchain_tx ->
-    aec_governance:tx_base_gas(Type) + Size * aec_governance:byte_gas() + CB:gas(Tx);
+    base_gas(Type) + size_gas(Size) + CB:gas(Tx);
 gas(#aetx{ type = channel_offchain_tx }) ->
     0.
 
@@ -187,7 +187,18 @@ min_gas(#aetx{ type = Type, size = Size }) when
       Type =:= contract_create_tx;
       Type =:= contract_call_tx;
       Type =:= channel_force_progress_tx ->
-    aec_governance:tx_base_gas(Type) + Size * aec_governance:byte_gas();
+    base_gas(Type) + size_gas(Size);
+min_gas(#aetx{type = Type, cb = CB, size = Size, tx = Tx }) when
+      Type =:= oracle_register_tx;
+      Type =:= oracle_extend_tx ->
+    TTL = ttl_delta(CB:oracle_ttl(Tx)),
+    base_gas(Type) + size_gas(Size) + state_gas(Type, TTL);
+min_gas(#aetx{type = oracle_query_tx, size = Size, tx = Tx }) ->
+    TTL = ttl_delta(aeo_query_tx:query_ttl(Tx)),
+    base_gas(oracle_query_tx) + size_gas(Size) + state_gas(oracle_query_tx, TTL);
+min_gas(#aetx{type = oracle_response_tx, size = Size, tx = Tx }) ->
+    TTL = ttl_delta(aeo_response_tx:response_ttl(Tx)),
+    base_gas(oracle_response_tx) + size_gas(Size) + state_gas(oracle_response_tx, TTL);
 min_gas(#aetx{} = Tx) ->
     gas(Tx).
 
@@ -373,6 +384,23 @@ specialize_callback(#aetx{ cb = CB, tx = Tx }) -> {CB, Tx}.
 -spec update_tx(tx(), tx_instance()) -> tx().
 update_tx(#aetx{} = Tx, NewTxI) ->
     Tx#aetx{tx = NewTxI}.
+
+base_gas(Type) ->
+    aec_governance:tx_base_gas(Type).
+
+size_gas(Size) ->
+    Size * aec_governance:byte_gas().
+
+state_gas(Tag, {delta, TTL}) ->
+    aec_governance_utils:state_gas(
+      aec_governance:state_gas_per_block(Tag),
+      TTL).
+
+ttl_delta({delta, _D} = TTL) ->
+    {delta, aeo_utils:ttl_delta(0, TTL)};
+ttl_delta({block, _H} = TTL) ->
+    CurrHeight = aec_blocks:height(aec_chain:top_block()),
+    {delta, aeo_utils:ttl_delta(CurrHeight, TTL)}.
 
 -ifdef(TEST).
 tx(Tx) ->

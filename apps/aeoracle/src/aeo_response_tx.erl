@@ -129,14 +129,8 @@ check(#oracle_response_tx{nonce = Nonce, query_id = QueryId,
             Checks =
                 [fun() -> check_response_ttl(ResponseTTL, QueryResponseTTL) end,
                  fun() -> check_oracle(OraclePubKey, Trees, Tx) end,
-                 fun() -> check_query(OraclePubKey, I) end |
-                 case aetx_env:context(Env) of
-                     aetx_contract -> []; %% TODO: Handle fees from contracts right.
-                     aetx_transaction ->
-                         [fun() -> aetx_utils:check_account(OraclePubKey, Trees,
-                                                            Nonce, Fee - QueryFee) end,
-                          fun() -> aeo_utils:check_ttl_fee(Height, ResponseTTL, Fee) end]
-                 end],
+                 fun() -> check_query(OraclePubKey, I) end],
+
             case aeu_validation:run(Checks) of
                 ok              -> {ok, Trees};
                 {error, Reason} -> {error, Reason}
