@@ -79,6 +79,7 @@ txs_gc(Config) ->
     aecore_suite_utils:start_node(dev1, Config),
     N1 = aecore_suite_utils:node_name(dev1),
     aecore_suite_utils:connect(N1),
+    ok = aecore_suite_utils:set_env(N1, aecore, mempool_nonce_offset, 100),
 
     %% Mine a block to get some funds. Height=1
     aecore_suite_utils:mine_key_blocks(N1, 1),
