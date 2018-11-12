@@ -832,7 +832,10 @@ handle_key_block_candidate_reply({{error, Reason}, _}, State) ->
 
 handle_synced_generation(Block, State) ->
     epoch_mining:info("synced_generation: ~p", [Block]),
-    handle_add_block(Block, State, block_synced).
+    T0 = erlang:system_time(millisecond),
+    Ret = handle_add_block(Block, State, block_synced),
+    epoch_mining:debug("synced_generation took: ~p ms", [erlang:system_time(millisecond) - T0]),
+    Ret.
 
 handle_post_block(Block, State) ->
     case aec_blocks:is_key_block(Block) of
