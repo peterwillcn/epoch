@@ -151,7 +151,7 @@ add_synced_generation_batched(#{} = Generation, AddKeyBlock) when is_boolean(Add
     Generation1 = Generation#{add_keyblock => AddKeyBlock},
     case aec_validation:validate_block(Generation1) of
         ok ->
-            gen_server:call(?SERVER, {add_synced_generation, Generation1});
+            gen_server:call(?SERVER, {add_synced_generation, Generation1}, 30000);
         {error, {header, Reason}} ->
             epoch_mining:info("Header failed validation: ~p", [Reason]),
             {error, Reason};
