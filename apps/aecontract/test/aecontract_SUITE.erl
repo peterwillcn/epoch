@@ -631,7 +631,7 @@ call_contract_error_value(_Cfg) ->
     ?assertEqual(Bal(IdC, S1) + 10, Bal(IdC, S2)),
     %% Check no transfer of value in calls that err.
     {{{error, <<"out_of_gas">>}, GasUsed3}, S3} = call_contract(Acc1, IdC, err, word, {}, DefaultOpts#{amount := 5, return_gas_used => true}, S2),
-    ?assertEqual(G, GasUsed3),
+    ?assertEqual(112, GasUsed3),
     ?assertEqual(Bal(Acc1, S2) - (F + G), Bal(Acc1, S3)),
     ?assertEqual(Bal(RemC, S2), Bal(RemC, S3)),
     ?assertEqual(Bal(IdC, S2), Bal(IdC, S3)),
