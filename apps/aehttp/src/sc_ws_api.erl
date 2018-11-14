@@ -11,6 +11,7 @@
 
 -export([protocol/1,
          process_from_client/4,
+         process_from_fsm/3,
          notify/3,
          error_reply/3
         ]).
@@ -58,6 +59,12 @@ process_from_client(Protocol, MsgBin, FsmPid, ChannelId) ->
                                           fsm        => FsmPid,
                                           msg        => MsgBin,
                                           channel_id => ChannelId}).
+
+process_from_fsm(Protocol, Msg, ChannelId) ->
+    try_seq([ fun process_fsm/1], #{protocol   => Protocol,
+                                    msg        => Msg,
+                                    channel_id => ChannelId}).
+
 protocol_to_impl(Protocol) ->
     case Protocol of
         jsonrpc -> sc_ws_api_jsonrpc;
@@ -113,3 +120,85 @@ process_incoming(#{api := Mod, unpacked_msg := Msg, fsm := FsmPid,
                    channel_id := ChannelId}) ->
     Response = Mod:process_incoming(Msg, FsmPid),
     Mod:reply(Response, Msg, ChannelId).
+
+
+process_fsm(#{msg := Msg,
+              channel_id := ChannelId,
+              protocol := Protocol}) ->
+    process_fsm_(Msg, ChannelId, Protocol).
+
+-spec process_fsm_(term(), binary(), protocol()) -> no_reply | {reply, map()} | {error, atom()}.
+process_fsm_(#{type := sign,
+               tag  := Tag,
+               info := Tx}, ChannelId, Protocol) when Tag =:= create_tx
+                                               orelse Tag =:= deposit_tx
+                                               orelse Tag =:= deposit_created
+                                               orelse Tag =:= withdraw_tx
+                                               orelse Tag =:= withdraw_created
+                                               orelse Tag =:= shutdown
+                                               orelse Tag =:= shutdown_ack
+                                               orelse Tag =:= funding_created
+                                               orelse Tag =:= update
+                                               orelse Tag =:= update_ack ->
+    EncTx = aehttp_api_encoder:encode(transaction, aetx:serialize_to_binary(Tx)),
+    Tag1 =
+        case Tag of
+            create_tx -> <<"initiator_sign">>;
+            funding_created -> <<"responder_sign">>;
+            shutdown -> <<"shutdown_sign">>;
+            shutdown_ack -> <<"shutdown_sign_ack">>;
+            deposit_created -> <<"deposit_ack">>;
+            withdraw_created -> <<"withdraw_ack">>;
+            T -> atom_to_binary(T, utf8)
+        end,
+    notify(Protocol,
+           #{action  => <<"sign">>,
+             tag => Tag1,
+             payload => #{tx => EncTx}},
+           ChannelId);
+process_fsm_(#{type := report,
+               tag  := Tag,
+               info := Event}, ChannelId, Protocol) when Tag =:= info
+                                                  orelse Tag =:= update
+                                                  orelse Tag =:= conflict
+                                                  orelse Tag =:= message
+                                                  orelse Tag =:= leave
+                                                  orelse Tag =:= error
+                                                  orelse Tag =:= debug
+                                                  orelse Tag =:= on_chain_tx ->
+    Payload =
+        case {Tag, Event} of
+            {info, {died, _}} -> #{event => <<"died">>};
+            {info, _} when is_atom(Event) -> #{event => atom_to_binary(Event, utf8)};
+            {on_chain_tx, Tx} ->
+                EncodedTx = aehttp_api_encoder:encode(transaction,
+                                               aetx_sign:serialize_to_binary(Tx)),
+                #{tx => EncodedTx};
+            {_, NewState} when Tag == update; Tag == leave ->
+                Bin = aehttp_api_encoder:encode(transaction,
+                                         aetx_sign:serialize_to_binary(NewState)),
+                #{state => Bin};
+            {conflict, #{channel_id := ChId,
+                         round      := Round}} ->
+                         #{channel_id => aehttp_api_encoder:encode(channel, ChId),
+                           round => Round};
+            {message, #{channel_id  := ChId,
+                        from        := From,
+                        to          := To,
+                        info        := Info}} ->
+                #{message => #{channel_id => aehttp_api_encoder:encode(channel, ChId),
+                               from => aehttp_api_encoder:encode(account_pubkey, From),
+                               to => aehttp_api_encoder:encode(account_pubkey, To),
+                               info => Info}};
+            {error, Msg} -> #{message => Msg};
+            {debug, Msg} -> #{message => Msg}
+        end,
+    Action = atom_to_binary(Tag, utf8),
+    notify(Protocol,
+           #{action => Action,
+             payload => Payload,
+             tag     => none},
+           ChannelId);
+process_fsm_(#{type := Type, tag := Tag, info := Event}, _, _) ->
+    error({unparsed_fsm_event, Type, Tag, Event}).
+

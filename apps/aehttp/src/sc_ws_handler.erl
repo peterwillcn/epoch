@@ -60,48 +60,19 @@ websocket_handle({text, MsgBin}, #handler{protocol = Protocol,
 websocket_handle(_Data, H) ->
     {ok, H}.
 
-websocket_info(Msg, #handler{} = H) ->
-    try_seq([ fun unpack_info/2
-            , fun websocket_info_/2 ], Msg, H).
-
-try_seq(Seq, Msg, #handler{} = H) ->
-    %% All funs in `Seq` except the last, are to return `{Msg', H'}`.
-    %% The expected return values of the last fun are explicit below.
-    try lists:foldl(fun(F, {M1, #handler{} =H1}) ->
-                            F(M1, H1)
-                    end, {Msg, H}, Seq) of
-        no_reply          -> {ok, reset_h(H)};
-        {ok, H1}          -> {ok, reset_h(H1)};
-        {reply, Resp}     -> {reply, {text, jsx:encode(Resp)}, reset_h(H)};
-        {reply, Resp, H1} -> {reply, {text, jsx:encode(Resp)}, reset_h(H1)};
-        {stop, H1}        -> {stop, reset_h(H1)}
-    catch
-        throw:{decode_error, Reason} ->
-            lager:debug("CAUGHT THROW {decode_error, ~p} (Msg = ~p)",
-                        [Reason, Msg]),
-            Protocol  = H#handler.protocol,
-            ChannelId = H#handler.enc_channel_id,
-            {reply, Err} = sc_ws_api:error_reply(Protocol, Reason, ChannelId),
-            {reply, {text, jsx:encode(Err), H}};
-        throw:{die_anyway, E} ->
-            lager:debug("CAUGHT THROW E = ~p / Msg = ~p / ~p",
-                        [E, Msg, erlang:get_stacktrace()]),
-            erlang:error(E);
-        error:E ->
-            lager:debug("CAUGHT E=~p / Msg = ~p / ~p", [E, Msg, erlang:get_stacktrace()]),
-            {ok, H}
-    end.
-
-reset_h(H) ->
-    H#handler{orig_request = undefined}.
-
-websocket_info_({aesc_fsm, FsmPid, Msg}, #handler{fsm_pid=FsmPid}=H) ->
+websocket_info({aesc_fsm, FsmPid, Msg}, #handler{fsm_pid = FsmPid,
+                                                 enc_channel_id = ChannelId,
+                                                 protocol = Protocol} = H) ->
     H1 = set_channel_id(Msg, H),
-    process_fsm(Msg, H1);
-websocket_info_({'DOWN', MRef, _, _, _}, #handler{fsm_mref = MRef} = H) ->
+    case sc_ws_api:process_from_fsm(Protocol, Msg, ChannelId) of
+        no_reply          -> {ok, H1};
+        {reply, Resp}     -> {reply, {text, jsx:encode(Resp)}, H1};
+        stop              -> {stop, H1}
+    end;
+websocket_info({'DOWN', MRef, _, _, _}, #handler{fsm_mref = MRef} = H) ->
     {stop, H#handler{fsm_pid = undefined,
                      fsm_mref = undefined}};
-websocket_info_(_Info, State) ->
+websocket_info(_Info, State) ->
     {ok, State}.
 
 set_channel_id(Msg, H) ->
@@ -216,85 +187,6 @@ parse_by_type(serialized_tx, V, RecordField) when is_binary(V) ->
             {error, {RecordField, broken_encoding}}
     end.
 
--spec process_fsm(term(), handler()) -> no_reply | {reply, map()} | {error, atom()}.
-process_fsm(#{type := sign,
-              tag  := Tag,
-              info := Tx}, H) when Tag =:= create_tx
-                            orelse Tag =:= deposit_tx
-                            orelse Tag =:= deposit_created
-                            orelse Tag =:= withdraw_tx
-                            orelse Tag =:= withdraw_created
-                            orelse Tag =:= shutdown
-                            orelse Tag =:= shutdown_ack
-                            orelse Tag =:= funding_created
-                            orelse Tag =:= update
-                            orelse Tag =:= update_ack ->
-    EncTx = aehttp_api_encoder:encode(transaction, aetx:serialize_to_binary(Tx)),
-    Tag1 =
-        case Tag of
-            create_tx -> <<"initiator_sign">>;
-            funding_created -> <<"responder_sign">>;
-            shutdown -> <<"shutdown_sign">>;
-            shutdown_ack -> <<"shutdown_sign_ack">>;
-            deposit_created -> <<"deposit_ack">>;
-            withdraw_created -> <<"withdraw_ack">>;
-            T -> atom_to_binary(T, utf8)
-        end,
-    Protocol  = H#handler.protocol,
-    ChannelId = H#handler.enc_channel_id,
-    sc_ws_api:notify(Protocol,
-                     #{action  => <<"sign">>,
-                       tag => Tag1,
-                       payload => #{tx => EncTx}},
-                     ChannelId);
-process_fsm(#{type := report,
-              tag  := Tag,
-              info := Event}, H) when Tag =:= info
-                               orelse Tag =:= update
-                               orelse Tag =:= conflict
-                               orelse Tag =:= message
-                               orelse Tag =:= leave
-                               orelse Tag =:= error
-                               orelse Tag =:= debug
-                               orelse Tag =:= on_chain_tx ->
-    Payload =
-        case {Tag, Event} of
-            {info, {died, _}} -> #{event => <<"died">>};
-            {info, _} when is_atom(Event) -> #{event => atom_to_binary(Event, utf8)};
-            {on_chain_tx, Tx} ->
-                EncodedTx = aehttp_api_encoder:encode(transaction,
-                                               aetx_sign:serialize_to_binary(Tx)),
-                #{tx => EncodedTx};
-            {_, NewState} when Tag == update; Tag == leave ->
-                Bin = aehttp_api_encoder:encode(transaction,
-                                         aetx_sign:serialize_to_binary(NewState)),
-                #{state => Bin};
-            {conflict, #{channel_id := ChId,
-                         round      := Round}} ->
-                         #{channel_id => aehttp_api_encoder:encode(channel, ChId),
-                           round => Round};
-            {message, #{channel_id  := ChId,
-                        from        := From,
-                        to          := To,
-                        info        := Info}} ->
-                #{message => #{channel_id => aehttp_api_encoder:encode(channel, ChId),
-                               from => aehttp_api_encoder:encode(account_pubkey, From),
-                               to => aehttp_api_encoder:encode(account_pubkey, To),
-                               info => Info}};
-            {error, Msg} -> #{message => Msg};
-            {debug, Msg} -> #{message => Msg}
-        end,
-    Action = atom_to_binary(Tag, utf8),
-    Protocol  = H#handler.protocol,
-    ChannelId = H#handler.enc_channel_id,
-    sc_ws_api:notify(Protocol,
-                     #{action => Action,
-                       payload => Payload,
-                       tag     => none},
-                    ChannelId);
-process_fsm(#{type := Type, tag := Tag, info := Event}, _H) ->
-    error({unparsed_fsm_event, Type, Tag, Event}).
-
 prepare_handler(#{<<"protocol">> := Protocol} = Params) ->
     lager:debug("prepare_handler() Params = ~p", [Params]),
     Read =
@@ -393,16 +285,4 @@ read_channel_options(Params) ->
           ++ lists:map(ReadReport, aesc_fsm:report_tags())
      ).
 
-
-unpack_info(Msg, #handler{protocol = Protocol} = H) ->
-    Req = info_to_req(Protocol, Msg),
-    { Msg, H#handler{orig_request = Req} }.
-
-info_to_req(_, {aesc_fsm, _, #{type := Type, tag := Tag} = Req})
-  when Type == report; Type == info; Type == sign ->
-    Method = iolist_to_binary(["channels.", atom_to_list(Type), ".", atom_to_list(Tag)]),
-    #{ <<"method">> => Method
-     , <<"params">> => Req };
-info_to_req(_, _) ->
-    undefined.
 
