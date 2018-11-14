@@ -39,18 +39,6 @@ legacy_to_method_in(Action) ->
 legacy_to_method_in(Action, Tag) ->
     <<"channels.", Action/binary, ".", Tag/binary>>.
 
-legacy_to_method_out(#{action := Action, tag := none} = Msg) ->
-    opt_type(Msg, <<"channels.", (bin(Action))/binary>>);
-legacy_to_method_out(#{action := Action, tag := Tag} = Msg) ->
-    opt_type(Msg, <<"channels.", (bin(Action))/binary, ".", (bin(Tag))/binary>>);
-legacy_to_method_out(#{action := Action} = Msg) ->
-    opt_type(Msg, <<"channels.", (bin(Action))/binary>>).
-
-opt_type(#{ {int,type} := T }, Bin) ->
-    <<Bin/binary, ".", (bin(T))/binary>>;
-opt_type(_, Bin) ->
-    Bin.
-
 bin(A) when is_atom(A)   -> atom_to_binary(A, utf8);
 bin(B) when is_binary(B) -> B.
 

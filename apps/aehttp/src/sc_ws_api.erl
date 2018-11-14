@@ -25,10 +25,10 @@
     {reply, map()}.
 
 -callback reply(response(), OrigMsg :: map()) ->
-    {reply, binary()} | no_reply | stop.
+    {reply, map()} | no_reply | stop.
 
 -callback notify(map()) ->
-    {reply, binary()}.
+    {reply, map()}.
 
 -callback process_incoming(Msg :: map() | list(map()), FsmPid :: pid()) ->
     {reply, map()} | no_reply | stop.
