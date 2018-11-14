@@ -7,9 +7,6 @@
 -export([websocket_info/2]).
 -export([terminate/3]).
 
--export([error_msg/1,
-         error_data_msg/1]).
-
 -record(handler, {fsm_pid            :: pid() | undefined,
                   fsm_mref           :: reference() | undefined,
                   fsm_version        :: non_neg_integer(),
@@ -24,29 +21,6 @@
 
 -opaque handler() :: #handler{}.
 -export_type([handler/0]).
--define(METHOD_SIGNED(Method), Method =:= <<"channels.initiator_sign">>;
-                               Method =:= <<"channels.deposit_tx">>;
-                               Method =:= <<"channels.deposit_ack">>;
-                               Method =:= <<"channels.withdraw_tx">>;
-                               Method =:= <<"channels.withdraw_ack">>;
-                               Method =:= <<"channels.responder_sign">>;
-                               Method =:= <<"channels.shutdown_sign">>;
-                               Method =:= <<"channels.shutdown_sign_ack">>;
-                               Method =:= <<"channels.update">>;
-                               Method =:= <<"channels.update_ack">>).
--define(METHOD_TAG(Method), case Method of
-                                <<"channels.initiator_sign">>    -> create_tx;
-                                <<"channels.deposit_tx">>        -> deposit_tx;
-                                <<"channels.deposit_ack">>       -> deposit_created;
-                                <<"channels.withdraw_tx">>       -> withdraw_tx;
-                                <<"channels.withdraw_ack">>      -> withdraw_created;
-                                <<"channels.responder_sign">>    -> funding_created;
-                                <<"channels.update">>            -> update;
-                                <<"channels.update_ack">>        -> update_ack;
-                                <<"channels.shutdown_sign">>     -> shutdown;
-                                <<"channels.shutdown_sign_ack">> -> shutdown_ack;
-                                <<"channels.leave">>             -> leave
-                            end).
 -define(FSM_VERSION, 1).
 
 init(Req, _Opts) ->
@@ -105,7 +79,9 @@ try_seq(Seq, Msg, #handler{} = H) ->
         throw:{decode_error, Reason} ->
             lager:debug("CAUGHT THROW {decode_error, ~p} (Msg = ~p)",
                         [Reason, Msg]),
-            {reply, Err} = error_response(Reason, H),
+            Protocol  = H#handler.protocol,
+            ChannelId = H#handler.enc_channel_id,
+            {reply, Err} = sc_ws_api:error_reply(Protocol, Reason, ChannelId),
             {reply, {text, jsx:encode(Err), H}};
         throw:{die_anyway, E} ->
             lager:debug("CAUGHT THROW E = ~p / Msg = ~p / ~p",
@@ -417,113 +393,6 @@ read_channel_options(Params) ->
           ++ lists:map(ReadReport, aesc_fsm:report_tags())
      ).
 
-error_response(Reason, #handler{protocol = legacy, orig_request = Req}) ->
-    {reply, #{ <<"action">>  => <<"error">>
-             , <<"payload">> => #{ <<"request">> => Req
-                                 , <<"reason">> => legacy_error_reason(Reason)} }
-    };
-error_response(Reason, #handler{protocol = jsonrpc, orig_request = Req}) ->
-    {reply, #{ <<"jsonrpc">> => <<"2.0">>
-             , <<"id">>      => error_id(Req)
-             , <<"error">>   => json_rpc_error_object(Reason, Req) }
-    }.
-
-error_id(#{ <<"id">> := Id }) -> Id;
-error_id(_) ->
-    null.
-
-%% this should be generalized more
-legacy_error_reason({broken_encoding, [accounts, contracts]}) ->
-    <<"broken_encoding: accounts, contracts">>;
-legacy_error_reason({broken_encoding, [accounts]}) ->
-    <<"broken_encoding: accounts">>;
-legacy_error_reason({broken_encoding, [contracts]}) ->
-    <<"broken_encoding: contracts">>;
-legacy_error_reason(Reason) ->
-    bin(Reason).
-
-%% JSON-RPC error objects. Try to follow
-%% https://github.com/ethereum/wiki/wiki/JSON-RPC-Error-Codes-Improvement-Proposal
-json_rpc_error_object(parse_error         , R) -> error_obj(-32700        , R);
-json_rpc_error_object(invalid_request     , R) -> error_obj(-32000        , R);
-json_rpc_error_object(unhandled           , R) -> error_obj(-32601        , R);
-json_rpc_error_object(broken_encoding     , R) -> error_obj(3     , [104] , R);
-json_rpc_error_object(broken_code         , R) -> error_obj(3     , [104] , R);
-json_rpc_error_object(conflict            , R) -> error_obj(3     , [107] , R);
-json_rpc_error_object(insufficient_balance, R) -> error_obj(3     , [1001], R);
-json_rpc_error_object(negative_amount     , R) -> error_obj(3     , [1002], R);
-json_rpc_error_object(invalid_pubkeys     , R) -> error_obj(3     , [1003], R);
-json_rpc_error_object(call_not_found      , R) -> error_obj(3     , [1004], R);
-json_rpc_error_object({broken_encoding,What}, R) ->
-    error_obj(3, [broken_encoding_code(W) || W <- What], R);
-json_rpc_error_object(not_found           , R) -> error_obj(3     , [100] , R);
-json_rpc_error_object(Other               , R) ->
-    lager:debug("Unrecognized error reason: ~p", [Other]),
-    error_obj(-32603        , R).
-
-error_obj(Code, OrigReq) when is_map(OrigReq) ->
-    #{ <<"code">>    => Code
-     , <<"message">> => error_msg(Code)
-     , <<"request">> => OrigReq };
-error_obj(Code, undefined) ->
-    #{ <<"code">>    => Code
-     , <<"message">> => error_msg(Code) }.
-
-error_obj(Code, Data, OrigReq) when is_map(OrigReq) ->
-    #{ <<"code">>    => Code
-     , <<"message">> => error_msg(Code)
-     , <<"data">>    => error_data(Data)
-     , <<"request">> => OrigReq };
-error_obj(Code, Data, undefined) ->
-    #{ <<"code">>    => Code
-     , <<"message">> => error_msg(Code)
-     , <<"data">>    => error_data(Data) }.
-
-error_msg(Code) ->
-    maps:get(Code, error_msgs(), <<"Unknown error">>).
-
-error_msgs() ->
-    #{
-       -32700 => <<"Parse error">>
-     , -32000 => <<"Invalid request">>
-     , -32601 => <<"Method not found">>
-     , -32602 => <<"Invalid params">>
-     , -32603 => <<"Internal error">>
-       %% Ethereum application error codes
-     , 1      => <<"Unauthorized">>
-     , 2      => <<"Action not allowed">>
-     , 3      => <<"Rejected">>
-     }.
-
-error_data(Codes) ->
-    [ #{ <<"code">>    => C
-       , <<"message">> => error_data_msg(C) } || C <- Codes].
-
-%% Mimicking Ethereum suggested custom error codes (not all relevant here)
-error_data_msg(Code) ->
-    maps:get(Code, error_data_msgs(), <<"Unknown error">>).
-
-error_data_msgs() ->
-    #{
-       100 => <<"X doesn't exist">>
-     , 101 => <<"Requires coin">>      %% (Requires ether)
-     , 102 => <<"Gas too low">>
-     , 103 => <<"Gas limit exceeded">>
-     , 104 => <<"Rejected">>
-     , 105 => <<"Value too low">>      %% (Ether too low)
-     , 106 => <<"Timeout">>
-     , 107 => <<"Conflict">>
-     %% Aeternity error codes
-     , 1001 => <<"Insufficient balance">>
-     , 1002 => <<"Negative amount">>
-     , 1003 => <<"Invalid pubkeys">>
-     , 1004 => <<"Call not found">>
-     , 1005 => <<"Broken encoding: accounts">>
-     , 1006 => <<"Broken encoding: contracts">>
-     }.
-
-broken_encoding_code(accounts ) -> 1005;
-broken_encoding_code(contracts) -> 1006.
 
 unpack_info(Msg, #handler{protocol = Protocol} = H) ->
     Req = info_to_req(Protocol, Msg),
@@ -537,5 +406,3 @@ info_to_req(_, {aesc_fsm, _, #{type := Type, tag := Tag} = Req})
 info_to_req(_, _) ->
     undefined.
 
-bin(A) when is_atom(A)   -> atom_to_binary(A, utf8);
-bin(B) when is_binary(B) -> B.

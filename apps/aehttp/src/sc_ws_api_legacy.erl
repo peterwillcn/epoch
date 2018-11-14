@@ -3,7 +3,7 @@
 -behavior(sc_ws_api).
 
 -export([unpack/1,
-         error_response/2,
+         error_response/3,
          reply/3,
          notify/2,
          process_incoming/2
@@ -27,8 +27,9 @@ unpack(#{ <<"action">> := Action }) ->
     #{ <<"method">> => Method }.
     
 
-error_response(Reason, Req) ->
+error_response(Reason, Req, ChannelId) ->
     {reply, #{ <<"action">>  => <<"error">>
+             , <<"channel_id">> => ChannelId
              , <<"payload">> => #{ <<"request">> => Req
                                  , <<"reason">> => legacy_error_reason(Reason)} }
     }.
@@ -59,8 +60,8 @@ reply(no_reply, _, _) -> no_reply;
 reply(stop, _, _)     -> stop;
 reply({reply, Reply}, _, ChannelId) ->
     {reply, clean_reply(Reply, ChannelId)};
-reply({error, Err}, Req, _) ->
-    error_response(Err, Req).
+reply({error, Err}, Req, ChannelId) ->
+    error_response(Err, Req, ChannelId).
 
 clean_reply(Map, ChannelId) ->
     clean_reply_(Map#{channel_id := ChannelId}).

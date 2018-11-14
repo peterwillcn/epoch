@@ -11,7 +11,8 @@
 
 -export([protocol/1,
          process_from_client/4,
-         notify/3
+         notify/3,
+         error_reply/3
         ]).
 
 %%%===================================================================
@@ -21,7 +22,8 @@
 -callback unpack(Msg :: map() | list(map())) ->
     Req :: map() | list(Req :: map()).
 
--callback error_response(Reason :: atom(), OrigMsg :: map() | binary()) ->
+-callback error_response(Reason :: atom(), OrigMsg :: map() | binary(),
+                         ChannelId :: binary()) ->
     {reply, map()}.
 
 -callback reply(response(), OrigMsg :: map(), ChannelId :: binary()) ->
@@ -66,6 +68,11 @@ notify(Protocol, Msg, ChannelId) ->
     Mod = protocol_to_impl(Protocol),
     Mod:notify(Msg, ChannelId).
 
+
+error_reply(Protocol, Reason, ChannelId) ->
+    Mod = protocol_to_impl(Protocol),
+    Mod:error_response(Reason, ChannelId).
+
 unpack_request(#{orig_msg := Msg, api := Mod} = Data) ->
     Unpacked = Mod:unpack(Msg),
     Data#{unpacked_msg => Unpacked}.
@@ -73,9 +80,7 @@ unpack_request(#{orig_msg := Msg, api := Mod} = Data) ->
 -spec try_seq(list(), map()) -> no_reply |
                                 {reply, binary()} |
                                 stop.
-try_seq(Seq, #{msg := Msg, api := Mod} = Data0) ->
-    %% All funs in `Seq` except the last, are to return `{Msg', H'}`.
-    %% The expected return values of the last fun are explicit below.
+try_seq(Seq, #{msg := Msg} = Data0) ->
     try lists:foldl(fun(F, Data) ->
                             F(Data)
                     end, Data0, Seq) of

@@ -5702,10 +5702,10 @@ data_code_to_reason([1004])      -> <<"call_not_found">>;
 data_code_to_reason([1005])      -> <<"broken_encoding: accounts">>;
 data_code_to_reason([1006])      -> <<"broken_encoding: contracts">>;
 data_code_to_reason([1005,1006]) -> <<"broken_encoding: accounts, contracts">>;
-data_code_to_reason([Code])      -> sc_ws_handler:error_data_msg(Code).
+data_code_to_reason([Code])      -> sc_ws_api_jsonrpc:error_data_msg(Code).
 
 code_to_reason(Code) ->
-    sc_ws_handler:error_msg(Code).
+    sc_ws_api_jsonrpc:error_msg(Code).
 
 method_pfx(Action) ->
     <<"channels.", (bin(Action))/binary>>.

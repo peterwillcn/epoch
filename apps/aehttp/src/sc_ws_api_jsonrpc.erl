@@ -3,11 +3,14 @@
 -behavior(sc_ws_api).
 
 -export([unpack/1,
-         error_response/2,
+         error_response/3,
          reply/3,
          notify/2,
          process_incoming/2
         ]).
+
+-export([error_msg/1,
+         error_data_msg/1]).
 
 -export([process_request/2]).
 
@@ -48,10 +51,11 @@ unpack(Msg) ->
         Msg),
     Msg.
 
-error_response(Reason, Req) ->
-    {reply, #{ <<"jsonrpc">> => ?JSONRPC_VERSION
-             , <<"id">>      => error_id(Req)
-             , <<"error">>   => json_rpc_error_object(Reason, Req) }
+error_response(Reason, Req, ChannelId) ->
+    {reply, #{ <<"jsonrpc">>    => ?JSONRPC_VERSION
+             , <<"id">>         => error_id(Req)
+             , <<"channel_id">> => ChannelId
+             , <<"error">>      => json_rpc_error_object(Reason, Req) }
     }.
 
 notify(Msg, ChannelId) ->
@@ -69,8 +73,8 @@ reply({reply,  L}, WholeMsg, ChannelId) when is_list(L) ->
         R ->
             {reply, [Resp || {reply, Resp} <- R]}
     end;
-reply({reply, {{error, Err}, Req}}, _, _) ->
-    error_response(Err, Req);
+reply({reply, {{error, Err}, Req}}, _, ChannelId) ->
+    error_response(Err, Req, ChannelId);
 reply({reply, {Reply, #{<<"id">> := Id}}}, _, ChannelId) ->
     {reply, #{ <<"jsonrpc">> => ?JSONRPC_VERSION
              , <<"channel_id">> => ChannelId
@@ -430,3 +434,4 @@ opt_type(_, Bin) ->
 
 bin(A) when is_atom(A)   -> atom_to_binary(A, utf8);
 bin(B) when is_binary(B) -> B.
+
