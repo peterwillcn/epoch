@@ -1,9 +1,5 @@
 -module(sc_ws_handler).
 
-%% API
--export([push/3,
-         push_async/3]).
-
 %% WS API
 -export([init/2]).
 -export([websocket_init/1]).
@@ -122,15 +118,6 @@ try_seq(Seq, Msg, #handler{} = H) ->
 reset_h(H) ->
     H#handler{orig_request = undefined}.
 
-websocket_info_({push, ChannelId, Data, Options}, #handler{} = H) ->
-    case ChannelId =:= channel_id(H) of
-        false ->
-            process_response({error, wrong_channel_id}, Options),
-            {ok, H};
-        true ->
-            process_response(ok, Options),
-            reply(Data, H)
-    end;
 websocket_info_({aesc_fsm, FsmPid, Msg}, #handler{fsm_pid=FsmPid}=H) ->
     H1 = set_channel_id(Msg, H),
     process_fsm(Msg, H1);
@@ -189,29 +176,6 @@ channel_id(#handler{channel_id = ChannelId}) ->
 -spec fsm_pid(handler()) -> pid() | undefined.
 fsm_pid(#handler{fsm_pid = Pid}) ->
     Pid.
-
--spec push(pid(), aesc_channels:id(), map()) -> ok | {error, timeout}
-                                                   | {error, noproc}
-                                                   | {error, wrong_channel_id}.
-push(WsPid, ChannelId, Data) ->
-    WsPid ! {push, ChannelId, Data, [{sender, self()}]},
-    receive
-        {ws_proc_response, Resp} -> Resp
-    after 5000 ->
-        case is_ws_alive(WsPid) of
-            false -> {error, noproc};
-            true -> {error, timeout}
-        end
-    end.
-
--spec push_async(pid(), aesc_channels:id(), map()) -> ok | {error, noproc}.
-push_async(WsPid, ChannelId, Data) ->
-    case is_ws_alive(WsPid) of
-        false -> {error, noproc};
-        true ->
-            WsPid ! {push, ChannelId, Data, []},
-            ok
-    end.
 
 -spec process_response(term(), list()) -> ok.
 process_response(Response, Options) ->
