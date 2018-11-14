@@ -16,10 +16,11 @@
 
 -record(handler, {fsm_pid            :: pid() | undefined,
                   fsm_mref           :: reference() | undefined,
+                  fsm_version        :: non_neg_integer(),
                   channel_id         :: aesc_channels:id() | undefined,
                   enc_channel_id     :: aehttp_api_encoder:encoded() | undefined,
                   job_id             :: term(),
-                  protocol = legacy  :: legacy | jsonrpc,
+                  protocol           :: sc_ws_api:protocol(), 
                   orig_request       :: map() | undefined,
                   role               :: initiator | responder | undefined,
                   host               :: binary() | undefined,
@@ -50,11 +51,13 @@
                                 <<"channels.shutdown_sign_ack">> -> shutdown_ack;
                                 <<"channels.leave">>             -> leave
                             end).
+-define(FSM_VERSION, 1).
 
 init(Req, _Opts) ->
     lager:debug("init(~p, ~p)", [Req, _Opts]),
     {cowboy_websocket, Req,
-     maps:merge(#{<<"protocol">> => <<"legacy">>},
+     maps:merge(#{<<"protocol">> => <<"legacy">>,
+                  <<"fsm_version">>  => ?FSM_VERSION},
                 maps:from_list(cowboy_req:parse_qs(Req)))}.
 
 -spec websocket_init(map()) -> {ok, handler()} | {stop, undefined}.
@@ -76,10 +79,13 @@ websocket_init(Params) ->
     end.
 
 -spec websocket_handle(term(), handler()) -> {ok, handler()}.
-websocket_handle({text, MsgBin}, #handler{} = H) ->
-    try_seq([ fun jsx_decode/2
-            , fun unpack_request/2
-            , fun process_incoming/2 ], MsgBin, H);
+websocket_handle({text, MsgBin}, #handler{protocol = Protocol,
+                                          fsm_pid  = FsmPid} = H) ->
+    case sc_ws_api:process_from_client(Protocol, MsgBin, FsmPid) of
+        no_reply          -> {ok, H};
+        {reply, Resp}     -> {reply, {text, jsx:encode(Resp)}, H};
+        stop              -> {stop, H}
+    end;
 websocket_handle(_Data, H) ->
     {ok, H}.
 
@@ -116,7 +122,7 @@ try_seq(Seq, Msg, #handler{} = H) ->
 reset_h(H) ->
     H#handler{orig_request = undefined}.
 
-websocket_info_({push, ChannelId, Data, Options}, H) ->
+websocket_info_({push, ChannelId, Data, Options}, #handler{} = H) ->
     case ChannelId =:= channel_id(H) of
         false ->
             process_response({error, wrong_channel_id}, Options),
@@ -232,9 +238,10 @@ start_link_fsm(#handler{role = initiator, host=Host, port=Port}, Opts) ->
 start_link_fsm(#handler{role = responder, port=Port}, Opts) ->
     {ok, _Pid} = aesc_fsm:respond(Port, Opts).
 
-set_field(H, host, Val) -> H#handler{host = Val};
-set_field(H, role, Val) -> H#handler{role = Val};
-set_field(H, port, Val) -> H#handler{port = Val}.
+set_field(H, host, Val)         -> H#handler{host = Val};
+set_field(H, role, Val)         -> H#handler{role = Val};
+set_field(H, port, Val)         -> H#handler{port = Val};
+set_field(H, fsm_version, Val)  -> H#handler{fsm_version = Val}.
 
 -spec read_param(binary(), atom(), map()) -> fun((map()) -> {ok, term()} |
                                                             not_set |
@@ -279,6 +286,8 @@ parse_by_type(atom, V, _) when is_binary(V) ->
     {ok, binary_to_existing_atom(V, utf8)};
 parse_by_type(integer, V, _) when is_binary(V) ->
     {ok, list_to_integer(binary_to_list(V))};
+parse_by_type(integer, V, _) when is_integer(V) ->
+    {ok, V};
 parse_by_type({hash, Type}, V, RecordField) when is_binary(V) ->
     case aehttp_api_encoder:safe_decode(Type, V) of
         {error, _} ->
@@ -537,9 +546,10 @@ process_fsm(#{type := sign,
             withdraw_created -> <<"withdraw_ack">>;
             T -> atom_to_binary(T, utf8)
         end,
-    reply(#{action  => <<"sign">>,
-            tag => Tag1,
-            payload => #{tx => EncTx}}, H);
+    Protocol = H#handler.protocol,
+    sc_ws_api:notify(Protocol, #{action  => <<"sign">>,
+                                 tag => Tag1,
+                                 payload => #{tx => EncTx}});
 process_fsm(#{type := report,
               tag  := Tag,
               info := Event}, H) when Tag =:= info
@@ -584,7 +594,7 @@ process_fsm(#{type := report,
 process_fsm(#{type := Type, tag := Tag, info := Event}, _H) ->
     error({unparsed_fsm_event, Type, Tag, Event}).
 
-prepare_handler(Params) ->
+prepare_handler(#{<<"protocol">> := Protocol} = Params) ->
     lager:debug("prepare_handler() Params = ~p", [Params]),
     Read =
         fun(Key, RecordField, Opts) ->
@@ -615,21 +625,15 @@ prepare_handler(Params) ->
                 responder -> H
             end
         end,
-        Read(<<"port">>, port, #{type => integer})
+        Read(<<"port">>, port, #{type => integer}),
+        Read(<<"fsm_version">>, fsm_version, #{type => integer})
         ],
     lists:foldl(
         fun(_, {error, _} = Err) -> Err;
             (Fun, Accum) -> Fun(Accum)
         end,
-        #handler{protocol = protocol(Params)}, Validators).
-
-protocol(#{<<"protocol">> := P}) ->
-    case P of
-        <<"legacy">>   -> legacy;
-        <<"json-rpc">> -> jsonrpc;
-        _Other ->
-            erlang:error(invalid_protocol)
-    end.
+        #handler{protocol    = sc_ws_api:protocol(Protocol),
+                 fsm_version = ?FSM_VERSION}, Validators).
 
 read_channel_options(Params) ->
     Read =
