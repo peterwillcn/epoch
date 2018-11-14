@@ -10,8 +10,8 @@
               response/0]).
 
 -export([protocol/1,
-         process_from_client/3,
-         notify/2
+         process_from_client/4,
+         notify/3
         ]).
 
 %%%===================================================================
@@ -24,10 +24,10 @@
 -callback error_response(Reason :: atom(), OrigMsg :: map() | binary()) ->
     {reply, map()}.
 
--callback reply(response(), OrigMsg :: map()) ->
+-callback reply(response(), OrigMsg :: map(), ChannelId :: binary()) ->
     {reply, map()} | no_reply | stop.
 
--callback notify(map()) ->
+-callback notify(map(), ChannelId :: binary()) ->
     {reply, map()}.
 
 -callback process_incoming(Msg :: map() | list(map()), FsmPid :: pid()) ->
@@ -46,25 +46,25 @@ protocol(P) ->
             erlang:error(invalid_protocol)
     end.
 
--spec process_from_client(protocol(), binary(), pid()) -> no_reply |
-                                                          {reply, binary()} |
-                                                          stop.
-process_from_client(Protocol, MsgBin, FsmPid) ->
+-spec process_from_client(protocol(), binary(), pid(), binary())
+    -> no_reply | {reply, binary()} | stop.
+process_from_client(Protocol, MsgBin, FsmPid, ChannelId) ->
     Mod = protocol_to_impl(Protocol),
     try_seq([ fun jsx_decode/1
             , fun unpack_request/1
-            , fun process_incoming/1 ], #{api  => Mod,
-                                          fsm  => FsmPid,
-                                          msg  => MsgBin}).
+            , fun process_incoming/1 ], #{api        => Mod,
+                                          fsm        => FsmPid,
+                                          msg        => MsgBin,
+                                          channel_id => ChannelId}).
 protocol_to_impl(Protocol) ->
     case Protocol of
         jsonrpc -> sc_ws_api_jsonrpc;
         legacy  -> sc_ws_api_legacy
     end.
 
-notify(Protocol, Msg) ->
+notify(Protocol, Msg, ChannelId) ->
     Mod = protocol_to_impl(Protocol),
-    Mod:notify(Msg).
+    Mod:notify(Msg, ChannelId).
 
 unpack_request(#{orig_msg := Msg, api := Mod} = Data) ->
     Unpacked = Mod:unpack(Msg),
@@ -104,6 +104,7 @@ jsx_decode(#{msg := Msg} = Data) ->
             throw({decode_error, parse_error})
     end.
 
-process_incoming(#{api := Mod, unpacked_msg := Msg, fsm := FsmPid}) ->
+process_incoming(#{api := Mod, unpacked_msg := Msg, fsm := FsmPid,
+                   channel_id := ChannelId}) ->
     Response = Mod:process_incoming(Msg, FsmPid),
-    Mod:reply(Response, Msg).
+    Mod:reply(Response, Msg, ChannelId).

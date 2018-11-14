@@ -76,8 +76,9 @@ websocket_init(Params) ->
 
 -spec websocket_handle(term(), handler()) -> {ok, handler()}.
 websocket_handle({text, MsgBin}, #handler{protocol = Protocol,
+                                          enc_channel_id = ChannelId,
                                           fsm_pid  = FsmPid} = H) ->
-    case sc_ws_api:process_from_client(Protocol, MsgBin, FsmPid) of
+    case sc_ws_api:process_from_client(Protocol, MsgBin, FsmPid, ChannelId) of
         no_reply          -> {ok, H};
         {reply, Resp}     -> {reply, {text, jsx:encode(Resp)}, H};
         stop              -> {stop, H}
@@ -143,14 +144,6 @@ set_channel_id_(#{channel_id := A}, #handler{channel_id = B})
 set_channel_id_(_Msg, H) ->
     H.
 
-fsm_reply(Msg, #handler{enc_channel_id = Id} = H) ->
-    lager:debug("fsm_reply( Id = ~p )", [Id]),
-    case Id of
-        undefined -> reply(Msg, H);
-        _         -> reply(maps:merge(#{channel_id => Id}, Msg), H)
-    end.
-
-
 terminate(_Reason, _PartialReq, #{} = _H) ->
     % not initialized yet
     ok;
@@ -169,32 +162,9 @@ terminate(Reason, _PartialReq, State) ->
 job_id(#handler{job_id = JobId}) ->
     JobId.
 
--spec channel_id(handler()) -> aesc_channels:id() | undefined.
-channel_id(#handler{channel_id = ChannelId}) ->
-    ChannelId.
-
 -spec fsm_pid(handler()) -> pid() | undefined.
 fsm_pid(#handler{fsm_pid = Pid}) ->
     Pid.
-
--spec process_response(term(), list()) -> ok.
-process_response(Response, Options) ->
-    lists:foreach(
-        fun({Key, Fun}) ->
-            case proplists:get_value(Key, Options) of
-                undefined -> pass;
-                Value -> Fun(Value)
-            end
-        end,
-        [{sender, fun(SenderPid) -> SenderPid ! {ws_proc_response, Response} end}]),
-    ok.
-
--spec is_ws_alive(pid()) -> boolean().
-is_ws_alive(Pid) ->
-    case erlang:process_info(Pid) of
-        undefined -> false;
-        _ -> true
-    end.
 
 -spec start_link_fsm(handler(), map()) -> {ok, pid()}.
 start_link_fsm(#handler{role = initiator, host=Host, port=Port}, Opts) ->
@@ -294,10 +264,13 @@ process_fsm(#{type := sign,
             withdraw_created -> <<"withdraw_ack">>;
             T -> atom_to_binary(T, utf8)
         end,
-    Protocol = H#handler.protocol,
-    sc_ws_api:notify(Protocol, #{action  => <<"sign">>,
-                                 tag => Tag1,
-                                 payload => #{tx => EncTx}});
+    Protocol  = H#handler.protocol,
+    ChannelId = H#handler.enc_channel_id,
+    sc_ws_api:notify(Protocol,
+                     #{action  => <<"sign">>,
+                       tag => Tag1,
+                       payload => #{tx => EncTx}},
+                     ChannelId);
 process_fsm(#{type := report,
               tag  := Tag,
               info := Event}, H) when Tag =:= info
@@ -336,9 +309,13 @@ process_fsm(#{type := report,
             {debug, Msg} -> #{message => Msg}
         end,
     Action = atom_to_binary(Tag, utf8),
-    fsm_reply(#{action => Action,
-                payload => Payload,
-                tag     => none}, H);
+    Protocol  = H#handler.protocol,
+    ChannelId = H#handler.enc_channel_id,
+    sc_ws_api:notify(Protocol,
+                     #{action => Action,
+                       payload => Payload,
+                       tag     => none},
+                    ChannelId);
 process_fsm(#{type := Type, tag := Tag, info := Event}, _H) ->
     error({unparsed_fsm_event, Type, Tag, Event}).
 
@@ -559,135 +536,6 @@ info_to_req(_, {aesc_fsm, _, #{type := Type, tag := Tag} = Req})
      , <<"params">> => Req };
 info_to_req(_, _) ->
     undefined.
-
-reply(Payload, #handler{protocol = legacy, orig_request = undefined}) ->
-    {reply, clean_reply(Payload)};
-reply(Payload, #handler{protocol = legacy, orig_request = #{<<"method">> := Method}}) ->
-    {reply, legacy_notify(Method, Payload)};
-reply(Reply, #handler{protocol = jsonrpc} = H) ->
-    json_rpc_reply(Reply, H).
-
-legacy_notify(Method, Reply) ->
-    lager:debug("legacy_notify(~p, ~p)", [Method, Reply]),
-    case binary:split(Method, [<<".">>], [global]) of
-        [<<"channels">>, Action, _Tag] ->
-            Action1 = opt_maps_get(action, Reply, Action),
-            Msg = opt_elems([tag, channel_id], #{ <<"action">> => Action1 }, Reply),
-            add_payload(Reply, Msg);
-        [<<"channels">>, Action] ->
-            Action1 = opt_maps_get(action, Reply, Action),
-            Msg = opt_elems([tag, channel_id], #{ <<"action">> => Action1 }, Reply),
-            add_payload(Reply, Msg)
-    end.
-
-opt_elems(Keys, Msg, Reply) when is_map(Reply) ->  % Reply may not be a map
-    M = lists:foldl(
-          fun(K, Acc) ->
-                  case maps:find(K, Reply) of
-                      {ok, none} -> Acc;
-                      {ok, V} ->
-                          Kb = bin(K),
-                          Acc#{ Kb => V };
-                      error ->
-                          Acc
-                  end
-          end, #{}, Keys),
-    maps:merge(M, Msg);
-opt_elems(_, Msg, _) ->
-    Msg.
-
-opt_maps_get(Key, Map, Default) when is_map(Map) ->
-    maps:get(Key, Map, Default);
-opt_maps_get(_ , _, Default) ->
-    Default.
-
-add_payload(#{payload := Payload}, Msg) -> Msg#{<<"payload">> => Payload};
-add_payload(#{action := _}       , Msg) -> clean_reply(Msg);
-add_payload(Reply                , Msg) ->
-    Msg#{<<"payload">> => clean_reply(Reply)}.
-
-json_rpc_reply(Reply, H) ->
-    json_rpc_reply(Reply, H, notify).
-
-json_rpc_reply(Reply, #handler{orig_request = Req} = H, Mode) ->
-    lager:debug("json_rpc_reply(~p, Req = ~p, Mode = ~p)", [Reply, Req, Mode]),
-    case {Req, Mode} of
-        {#{<<"id">> := Id}, _} ->
-            {reply, #{ <<"jsonrpc">> => <<"2.0">>
-                     , <<"id">>      => Id
-                     , <<"result">>  => result(Reply) }
-            };
-        {_, notify} ->
-            {reply, #{ <<"jsonrpc">> => <<"2.0">>
-                     , <<"method">>  => legacy_to_method_out(Reply)
-                     , <<"params">>  => notify_result(Reply, H) } };
-        {_, no_reply} ->
-            no_reply
-    end.
-
-result(#{payload := Payload0} = R) ->
-    Payload = clean_reply(Payload0),
-    case {Payload, R} of
-        {#{channel_id := _}, _} ->
-            Payload;
-        {_, #{channel_id := Id}} when is_map(Payload) ->
-            Payload#{<<"channel_id">> => Id};
-        _ ->
-            Payload
-    end;
-result(Result) -> 
-    clean_reply(Result).
-
-notify_result(#{payload := Payload0} = R, #handler{enc_channel_id = Id0}) ->
-    Payload = clean_reply(Payload0),
-    case {Payload, R} of
-        {#{channel_id := Id}, _} ->
-            #{ channel_id => Id
-             , data => maps:remove(channel_id, Payload) };
-        {_, #{channel_id := Id}} ->
-            #{ channel_id => Id
-             , data => Payload };
-        _ ->
-            #{ channel_id => Id0
-             , data => Payload }
-    end;
-notify_result(R, #handler{enc_channel_id = Id0}) ->
-    case R of
-        #{channel_id := Id} ->
-            #{ channel_id => Id};
-        _ ->
-            #{ channel_id => Id0 }
-    end.
-
-
-clean_reply(Map) when is_map(Map) ->
-    maps:filter(fun(K,_) ->
-                        is_atom(K) orelse is_binary(K)
-                end, Map);
-clean_reply(Msg) -> Msg.
-
-legacy_to_method_in(Action) ->
-    <<"channels.", Action/binary>>.
-
-legacy_to_method_in(Action, Tag) ->
-    <<"channels.", Action/binary, ".", Tag/binary>>.
-
-legacy_to_method_out(#{action := Action, tag := none} = Msg) ->
-    opt_type(Msg, <<"channels.", (bin(Action))/binary>>);
-legacy_to_method_out(#{action := Action, tag := Tag} = Msg) ->
-    opt_type(Msg, <<"channels.", (bin(Action))/binary, ".", (bin(Tag))/binary>>);
-legacy_to_method_out(#{action := Action} = Msg) ->
-    opt_type(Msg, <<"channels.", (bin(Action))/binary>>).
-
-opt_type(#{ {int,type} := T }, Bin) ->
-    <<Bin/binary, ".", (bin(T))/binary>>;
-opt_type(_, Bin) ->
-    Bin.
-
-reply(_, #handler{protocol = legacy}, no_reply) ->
-    no_reply;
-reply(Reply, #handler{protocol = jsonrpc} = H, _) ->
-    json_rpc_reply(Reply, H, no_reply).
 
 bin(A) when is_atom(A)   -> atom_to_binary(A, utf8);
 bin(B) when is_binary(B) -> B.

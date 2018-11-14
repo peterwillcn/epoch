@@ -4,8 +4,8 @@
 
 -export([unpack/1,
          error_response/2,
-         reply/2,
-         notify/1,
+         reply/3,
+         notify/2,
          process_incoming/2
         ]).
 
@@ -52,21 +52,23 @@ legacy_error_reason({broken_encoding, [contracts]}) ->
 legacy_error_reason(Reason) ->
     bin(Reason).
 
-notify(Msg) ->
-    {reply, clean_reply(Msg)}.
+notify(Msg, ChannelId) ->
+    {reply, clean_reply(Msg, ChannelId)}.
 
-reply(no_reply, _) -> no_reply;
-reply(stop, _)     -> stop;
-reply({reply, Reply}, _) ->
-    {reply, clean_reply(Reply)};
-reply({error, Err}, Req) ->
+reply(no_reply, _, _) -> no_reply;
+reply(stop, _, _)     -> stop;
+reply({reply, Reply}, _, ChannelId) ->
+    {reply, clean_reply(Reply, ChannelId)};
+reply({error, Err}, Req, _) ->
     error_response(Err, Req).
 
-clean_reply(Map) when is_map(Map) ->
+clean_reply(Map, ChannelId) ->
+    clean_reply_(Map#{channel_id := ChannelId}).
+
+clean_reply_(Map) when is_map(Map) ->
     maps:filter(fun(K,_) ->
                         is_atom(K) orelse is_binary(K)
-                end, Map);
-clean_reply(Msg) -> Msg.
+                end, Map).
 
 process_incoming(Req, FsmPid) ->
     try sc_ws_api_jsonrpc:process_request(Req, FsmPid) of

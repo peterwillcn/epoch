@@ -4,8 +4,8 @@
 
 -export([unpack/1,
          error_response/2,
-         reply/2,
-         notify/1,
+         reply/3,
+         notify/2,
          process_incoming/2
         ]).
 
@@ -54,29 +54,31 @@ error_response(Reason, Req) ->
              , <<"error">>   => json_rpc_error_object(Reason, Req) }
     }.
 
-notify(Msg) ->
+notify(Msg, ChannelId) ->
     {reply, #{ <<"jsonrpc">> => ?JSONRPC_VERSION
-              , <<"method">>  => method_out(Msg)
-              , <<"params">>  => #{<<"data">> => result(Msg)} }
+             , <<"method">>  => method_out(Msg)
+             , <<"params">>  => #{<<"data">> => result(Msg)
+                                , <<"channel_id">> => ChannelId} }
     }.
 
-reply(no_reply, _) -> no_reply;
-reply(stop, _)     -> stop;
-reply({reply,  L}, WholeMsg) when is_list(L) ->
-    case [reply({reply, Reply}, WholeMsg) || Reply <- L] of
+reply(no_reply, _, _) -> no_reply;
+reply(stop, _, _)     -> stop;
+reply({reply,  L}, WholeMsg, ChannelId) when is_list(L) ->
+    case [reply({reply, Reply}, WholeMsg, ChannelId) || Reply <- L] of
         [{reply, R}] -> {reply, R};
         R ->
             {reply, [Resp || {reply, Resp} <- R]}
     end;
-reply({reply, {{error, Err}, Req}}, _) ->
+reply({reply, {{error, Err}, Req}}, _, _) ->
     error_response(Err, Req);
-reply({reply, {Reply, #{<<"id">> := Id}}}, _) ->
+reply({reply, {Reply, #{<<"id">> := Id}}}, _, ChannelId) ->
     {reply, #{ <<"jsonrpc">> => ?JSONRPC_VERSION
-              , <<"id">>      => Id
-              , <<"result">>  => result(Reply) }
+             , <<"channel_id">> => ChannelId
+             , <<"id">>      => Id
+             , <<"result">>  => result(Reply) }
     };
-reply({reply, {Reply, #{}}}, _) ->
-    notify(Reply).
+reply({reply, {Reply, #{}}}, _, ChannelId) -> % no id
+    notify(Reply, ChannelId).
 
 result(#{payload := Payload0} = R) ->
     Payload = clean_reply(Payload0),
