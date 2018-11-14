@@ -9,7 +9,6 @@
 
 -record(handler, {fsm_pid            :: pid() | undefined,
                   fsm_mref           :: reference() | undefined,
-                  fsm_version        :: non_neg_integer(),
                   channel_id         :: aesc_channels:id() | undefined,
                   enc_channel_id     :: aehttp_api_encoder:encoded() | undefined,
                   job_id             :: term(),
@@ -21,13 +20,11 @@
 
 -opaque handler() :: #handler{}.
 -export_type([handler/0]).
--define(FSM_VERSION, 1).
 
 init(Req, _Opts) ->
     lager:debug("init(~p, ~p)", [Req, _Opts]),
     {cowboy_websocket, Req,
-     maps:merge(#{<<"protocol">> => <<"legacy">>,
-                  <<"fsm_version">>  => ?FSM_VERSION},
+     maps:merge(#{<<"protocol">> => <<"legacy">>},
                 maps:from_list(cowboy_req:parse_qs(Req)))}.
 
 -spec websocket_init(map()) -> {ok, handler()} | {stop, undefined}.
@@ -121,8 +118,7 @@ start_link_fsm(#handler{role = responder, port=Port}, Opts) ->
 
 set_field(H, host, Val)         -> H#handler{host = Val};
 set_field(H, role, Val)         -> H#handler{role = Val};
-set_field(H, port, Val)         -> H#handler{port = Val};
-set_field(H, fsm_version, Val)  -> H#handler{fsm_version = Val}.
+set_field(H, port, Val)         -> H#handler{port = Val}.
 
 -spec read_param(binary(), atom(), map()) -> fun((map()) -> {ok, term()} |
                                                             not_set |
@@ -218,15 +214,13 @@ prepare_handler(#{<<"protocol">> := Protocol} = Params) ->
                 responder -> H
             end
         end,
-        Read(<<"port">>, port, #{type => integer}),
-        Read(<<"fsm_version">>, fsm_version, #{type => integer})
+        Read(<<"port">>, port, #{type => integer})
         ],
     lists:foldl(
         fun(_, {error, _} = Err) -> Err;
             (Fun, Accum) -> Fun(Accum)
         end,
-        #handler{protocol    = sc_ws_api:protocol(Protocol),
-                 fsm_version = ?FSM_VERSION}, Validators).
+        #handler{protocol    = sc_ws_api:protocol(Protocol)}, Validators).
 
 read_channel_options(Params) ->
     Read =

@@ -9,6 +9,7 @@
          process_incoming/2
         ]).
 
+-define(VERSION, 1).
 
 -spec unpack(map()) -> map().
 unpack(#{ <<"action">>  := Action
@@ -28,10 +29,11 @@ unpack(#{ <<"action">> := Action }) ->
     
 
 error_response(Reason, Req, ChannelId) ->
-    {reply, #{ <<"action">>  => <<"error">>
+    {reply, #{ <<"action">>     => <<"error">>
+             , <<"version">>    => ?VERSION
              , <<"channel_id">> => ChannelId
-             , <<"payload">> => #{ <<"request">> => Req
-                                 , <<"reason">> => legacy_error_reason(Reason)} }
+             , <<"payload">>    => #{ <<"request">> => Req
+                                    , <<"reason">> => legacy_error_reason(Reason)} }
     }.
 
 legacy_to_method_in(Action) ->
@@ -64,7 +66,8 @@ reply({error, Err}, Req, ChannelId) ->
     error_response(Err, Req, ChannelId).
 
 clean_reply(Map, ChannelId) ->
-    clean_reply_(Map#{channel_id := ChannelId}).
+    clean_reply_(Map#{channel_id => ChannelId,
+                      version := ?VERSION}).
 
 clean_reply_(Map) when is_map(Map) ->
     maps:filter(fun(K,_) ->

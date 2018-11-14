@@ -16,6 +16,8 @@
 
 -define(JSONRPC_VERSION, <<"2.0">>).
 
+-define(VERSION, 1).
+
 -define(METHOD_SIGNED(Method), Method =:= <<"channels.initiator_sign">>;
                                Method =:= <<"channels.deposit_tx">>;
                                Method =:= <<"channels.deposit_ack">>;
@@ -45,7 +47,7 @@ unpack(Msg) when is_map(Msg) ->
 unpack(Msg) ->
     lists:all(
         fun(#{ <<"jsonrpc">> := ?JSONRPC_VERSION
-              , <<"method">>  := _Method }) -> true;
+             , <<"method">>  := _Method }) -> true;
            (_) -> throw({decode_error, invalid_request})
         end,
         Msg),
@@ -53,6 +55,7 @@ unpack(Msg) ->
 
 error_response(Reason, Req, ChannelId) ->
     {reply, #{ <<"jsonrpc">>    => ?JSONRPC_VERSION
+             , <<"version">>    => ?VERSION
              , <<"id">>         => error_id(Req)
              , <<"channel_id">> => ChannelId
              , <<"error">>      => json_rpc_error_object(Reason, Req) }
@@ -60,6 +63,7 @@ error_response(Reason, Req, ChannelId) ->
 
 notify(Msg, ChannelId) ->
     {reply, #{ <<"jsonrpc">> => ?JSONRPC_VERSION
+             , <<"version">>    => ?VERSION
              , <<"method">>  => method_out(Msg)
              , <<"params">>  => #{<<"data">> => result(Msg)
                                 , <<"channel_id">> => ChannelId} }
@@ -77,6 +81,7 @@ reply({reply, {{error, Err}, Req}}, _, ChannelId) ->
     error_response(Err, Req, ChannelId);
 reply({reply, {Reply, #{<<"id">> := Id}}}, _, ChannelId) ->
     {reply, #{ <<"jsonrpc">> => ?JSONRPC_VERSION
+             , <<"version">>    => ?VERSION
              , <<"channel_id">> => ChannelId
              , <<"id">>      => Id
              , <<"result">>  => result(Reply) }
