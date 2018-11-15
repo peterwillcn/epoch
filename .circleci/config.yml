@@ -15,7 +15,7 @@ references:
 
   infrastructure_config: &infrastructure_config
     docker:
-      - image: aeternity/infrastructure
+      - image: aeternity/infrastructure:PT-161920679_docker-entrypoint
     working_directory: ~/epoch
 
   machine_config: &machine_config
@@ -166,7 +166,7 @@ references:
           export PACKAGE=${PACKAGE_TARBALL:?}
           export DEPLOY_DB_VERSION=$(cat deployment/DB_VERSION)
           export AWS_CREDS_ROLE=epoch-inventory
-          source /infrastructure/import-secrets.sh
+          #source /infrastructure/import-secrets.sh
           cd /infrastructure && make deploy
 
   upload_github_release_asset: &upload_github_release_asset
