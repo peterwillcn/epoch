@@ -3,17 +3,15 @@
 -define(PROTOCOLS, [legacy, jsonrpc]).
 
 %TODO type -> opaque
--type protocol() :: legacy | jsonrpc.
--opaque response() :: {reply, map()} | no_reply | stop.
+-opaque protocol() :: legacy | jsonrpc.
+-type response() :: {reply, map()} | no_reply | stop.
 
 -export_type([protocol/0,
               response/0]).
 
 -export([protocol/1,
          process_from_client/4,
-         process_from_fsm/3,
-         notify/3,
-         error_reply/3
+         process_from_fsm/3
         ]).
 
 %%%===================================================================
@@ -28,7 +26,7 @@
     {reply, map()}.
 
 -callback reply(response(), OrigMsg :: map(), ChannelId :: binary()) ->
-    {reply, map()} | no_reply | stop.
+    response().
 
 -callback notify(map(), ChannelId :: binary()) ->
     {reply, map()}.
@@ -58,12 +56,12 @@ process_from_client(Protocol, MsgBin, FsmPid, ChannelId) ->
             , fun process_incoming/1 ], #{api        => Mod,
                                           fsm        => FsmPid,
                                           msg        => MsgBin,
-                                          channel_id => ChannelId}).
+                                          channel_id => non_undefined_channel_id(ChannelId)}).
 
 process_from_fsm(Protocol, Msg, ChannelId) ->
     try_seq([ fun process_fsm/1], #{protocol   => Protocol,
                                     msg        => Msg,
-                                    channel_id => ChannelId}).
+                                    channel_id => non_undefined_channel_id(ChannelId)}).
 
 protocol_to_impl(Protocol) ->
     case Protocol of
@@ -73,12 +71,7 @@ protocol_to_impl(Protocol) ->
 
 notify(Protocol, Msg, ChannelId) ->
     Mod = protocol_to_impl(Protocol),
-    Mod:notify(Msg, ChannelId).
-
-
-error_reply(Protocol, Reason, ChannelId) ->
-    Mod = protocol_to_impl(Protocol),
-    Mod:error_response(Reason, ChannelId).
+    Mod:notify(Msg, non_undefined_channel_id(ChannelId)).
 
 unpack_request(#{orig_msg := Msg, api := Mod} = Data) ->
     Unpacked = Mod:unpack(Msg),
@@ -201,4 +194,7 @@ process_fsm_(#{type := report,
            ChannelId);
 process_fsm_(#{type := Type, tag := Tag, info := Event}, _, _) ->
     error({unparsed_fsm_event, Type, Tag, Event}).
+
+non_undefined_channel_id(undefined) -> null;
+non_undefined_channel_id(Val)       -> Val.
 

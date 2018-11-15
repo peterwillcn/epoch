@@ -5631,6 +5631,7 @@ wait_for_channel_event_(ConnPid, Action, <<"legacy">>) ->
 wait_for_channel_event_(ConnPid, error, <<"json-rpc">>) ->
     case ?WS:wait_for_channel_msg(ConnPid, error) of   % whole msg
         {ok, #{ <<"jsonrpc">> := <<"2.0">>
+              , <<"channel_id">> := _
               , <<"id">>      := null
               , <<"error">>   := E } } ->
             {ok, lift_reason(E)}
@@ -5641,7 +5642,7 @@ wait_for_channel_event_(ConnPid, Action, <<"json-rpc">>) ->
     case {?WS:wait_for_channel_msg(ConnPid, Action), Method} of   % whole msg
         {{ok, #{ <<"jsonrpc">> := <<"2.0">>
                , <<"method">>  := <<Method:Sz/binary, _/binary>>
-               , <<"params">>  := Params }}, _} ->
+               , <<"params">>  := #{<<"channel_id">> := _} = Params }}, _} ->
             Data = maps:get(<<"data">>, Params, no_data),
             {ok, Data};
         {{ok, Tag, #{ <<"jsonrpc">> := <<"2.0">>
@@ -5682,7 +5683,7 @@ wait_for_json_rpc_action(ConnPid, Action) ->
     Sz = byte_size(Method0),
     {ok, #{ <<"jsonrpc">> := <<"2.0">>
           , <<"method">>  := <<Method0:Sz/binary, _/binary>>
-          , <<"params">>  := Params }} =
+          , <<"params">>  := #{<<"channel_id">> := _} = Params }} =
         ?WS:wait_for_channel_msg(ConnPid, Action),
     {ok, Params}.
 
