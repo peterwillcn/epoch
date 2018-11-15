@@ -13,7 +13,6 @@
                   enc_channel_id     :: aehttp_api_encoder:encoded() | undefined,
                   job_id             :: term(),
                   protocol           :: sc_ws_api:protocol(), 
-                  orig_request       :: map() | undefined,
                   role               :: initiator | responder | undefined,
                   host               :: binary() | undefined,
                   port               :: non_neg_integer() | undefined}).
