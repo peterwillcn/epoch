@@ -13,7 +13,8 @@
         ]).
 
 -define(INITIAL_TOKENS, 273685830).
--define(BLOCKS_PER_YEAR, 175200). %% (365 * 24 * 20)
+-define(BLOCKS_PER_YEAR, 175200).  %% 365 * 24 * 20
+-define(SLOW_START_BLOCKS, 16320). %% 34 * 24 * 20 (34 days)
 
 
 erlang_module(To, FileName) ->
@@ -30,7 +31,11 @@ erlang_module(To, FileName, InitialTokens) ->
               "%%%-------------------------------------------------------------------\n\n"
               "-module(aec_coinbase).\n"
               "-export([coinbase_at_height/1]).\n"
-              "\n", [?MODULE]),
+              "\n"
+              "-spec coinbase_at_height(non_neg_integer()) -> non_neg_integer().\n"
+              "coinbase_at_height(X) when not is_integer(X) orelse X < 0 -> error({bad_height, X});\n"
+              "coinbase_at_height(0) -> 0; %% No coinbase in genesis\n"
+             , [?MODULE]),
     Fun = fun({Height, Coinbase,_Existing}, LastCoinbase) ->
                   [io:format(FD, "coinbase_at_height(H) when H < ~p -> ~p;\n",
                              [Height, LastCoinbase * 1000000000000000])
@@ -77,5 +82,8 @@ coinbase(Height, Last, To, Existing, Acc, Fun) ->
 coinbase_at_height(Height, Existing) ->
     max(0, round(Existing * inflation_at_height(Height) / ?BLOCKS_PER_YEAR)).
 
+inflation_at_height(Height) when Height < ?SLOW_START_BLOCKS ->
+    Height * 0.3 / ?SLOW_START_BLOCKS;
 inflation_at_height(Height) ->
-    0.303/(1 + math:pow((2 * Height)/?BLOCKS_PER_YEAR, 0.86)) - 0.003.
+    Adjusted = Height - ?SLOW_START_BLOCKS,
+    0.303/(1 + math:pow((2 * Adjusted)/?BLOCKS_PER_YEAR, 0.86)) - 0.003.
