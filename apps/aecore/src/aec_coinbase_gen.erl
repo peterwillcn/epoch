@@ -34,12 +34,11 @@ erlang_module(To, FileName, InitialTokens) ->
               "\n"
               "-spec coinbase_at_height(non_neg_integer()) -> non_neg_integer().\n"
               "coinbase_at_height(X) when not is_integer(X) orelse X < 0 -> error({bad_height, X});\n"
-              "coinbase_at_height(0) -> 0; %% No coinbase in genesis\n"
              , [?MODULE]),
     Fun = fun({Height, Coinbase,_Existing}, LastCoinbase) ->
                   [io:format(FD, "coinbase_at_height(H) when H < ~p -> ~p;\n",
                              [Height, LastCoinbase * 1000000000000000])
-                   || LastCoinbase =/= undefined, LastCoinbase =/= 0],
+                   || LastCoinbase =/= undefined],
                   Coinbase
           end,
     LastCB = coinbase(0, undefined, To, InitialTokens, undefined, Fun),
@@ -79,6 +78,11 @@ coinbase(Height, Last, To, Existing, Acc, Fun) ->
             end
     end.
 
+coinbase_at_height(0,_Existing) ->
+    %% No coinbase at genesis block
+    0;
+coinbase_at_height(Height, Existing) when Height < ?SLOW_START_BLOCKS ->
+    max(1, round(Existing * inflation_at_height(Height) / ?BLOCKS_PER_YEAR));
 coinbase_at_height(Height, Existing) ->
     max(0, round(Existing * inflation_at_height(Height) / ?BLOCKS_PER_YEAR)).
 
