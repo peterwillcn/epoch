@@ -189,8 +189,7 @@ process_fsm_(#{type := report,
     Action = atom_to_binary(Tag, utf8),
     notify(Protocol,
            #{action => Action,
-             payload => Payload,
-             tag     => none},
+             payload => Payload},
            ChannelId);
 process_fsm_(#{type := Type, tag := Tag, info := Event}, _, _) ->
     error({unparsed_fsm_event, Type, Tag, Event}).

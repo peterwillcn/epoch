@@ -12,7 +12,7 @@
 -define(VERSION, 1).
 
 -spec unpack(map()) -> map().
-unpack(#{ <<"action">>  := Action
+unpack(#{ <<"action">>   := Action
         ,  <<"tag">>     := Tag
         ,  <<"payload">> := Payload }) ->
     Method = legacy_to_method_in(Action, Tag),
@@ -67,7 +67,7 @@ reply({error, Err}, Req, ChannelId) ->
 
 clean_reply(Map, ChannelId) ->
     clean_reply_(Map#{channel_id => ChannelId,
-                      version := ?VERSION}).
+                      version    => ?VERSION}).
 
 clean_reply_(Map) when is_map(Map) ->
     maps:filter(fun(K,_) ->
